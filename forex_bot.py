@@ -3,42 +3,213 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import datetime
+import MetaTrader5 as mt5
+import time
+import threading
 
-st.set_page_config(page_title="Forex Analyzer", layout="wide")
+st.set_page_config(page_title="Forex Auto Trader", layout="wide")
 
-st.title("📊 Forex & Indices Market Analyzer")
-st.write("Real-time trading signals (Educational Only)")
+st.title("🤖 Automated Forex Trading Bot")
+st.write("Real-time signals with MetaTrader integration (Educational Only)")
 
-st.write(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# ============================================
+# CONFIGURATION
+# ============================================
+st.sidebar.header("⚙️ Trading Configuration")
 
-# Define all instruments
+# Trading parameters
+AUTO_TRADE = st.sidebar.checkbox("🤖 Enable Auto-Trading", value=False)
+RISK_PERCENT = st.sidebar.slider("Risk per Trade (%)", 0.5, 5.0, 2.0, 0.5)
+MAX_POSITIONS = st.sidebar.slider("Max Concurrent Positions", 1, 10, 3)
+USE_TRAILING_STOP = st.sidebar.checkbox("Use Trailing Stop", value=False)
+
+# MetaTrader connection status
+mt5_connected = False
+
+if AUTO_TRADE:
+    st.sidebar.warning("⚠️ Auto-Trading is ENABLED - Bot will place real trades!")
+    
+    # Initialize MetaTrader
+    if not mt5.initialize():
+        st.sidebar.error("MetaTrader5 initialization failed!")
+        st.sidebar.info("Please ensure MetaTrader 5 is installed and running")
+    else:
+        mt5_connected = True
+        st.sidebar.success("✅ Connected to MetaTrader 5")
+        
+        # Get account info
+        account_info = mt5.account_info()
+        if account_info:
+            st.sidebar.metric("Account Balance", f"${account_info.balance:.2f}")
+            st.sidebar.metric("Equity", f"${account_info.equity:.2f}")
+            st.sidebar.metric("Free Margin", f"${account_info.margin_free:.2f}")
+else:
+    st.sidebar.info("⚙️ Auto-Trading is DISABLED - Demo mode only")
+
+# ============================================
+# INSTRUMENTS CONFIGURATION
+# ============================================
 pairs = {
     # Forex Pairs
-    'EURUSD=X': {'name': 'EUR/USD', 'type': 'Forex', 'decimals': 5},
-    'GBPUSD=X': {'name': 'GBP/USD', 'type': 'Forex', 'decimals': 5},
-    'USDJPY=X': {'name': 'USD/JPY', 'type': 'Forex', 'decimals': 3},
-    'AUDUSD=X': {'name': 'AUD/USD', 'type': 'Forex', 'decimals': 5},
-    'USDCAD=X': {'name': 'USD/CAD', 'type': 'Forex', 'decimals': 5},
-    'USDCHF=X': {'name': 'USD/CHF', 'type': 'Forex', 'decimals': 5},
-    'NZDUSD=X': {'name': 'NZD/USD', 'type': 'Forex', 'decimals': 5},
+    'EURUSD=X': {'name': 'EUR/USD', 'type': 'Forex', 'decimals': 5, 'mt5_symbol': 'EURUSD'},
+    'GBPUSD=X': {'name': 'GBP/USD', 'type': 'Forex', 'decimals': 5, 'mt5_symbol': 'GBPUSD'},
+    'USDJPY=X': {'name': 'USD/JPY', 'type': 'Forex', 'decimals': 3, 'mt5_symbol': 'USDJPY'},
+    'AUDUSD=X': {'name': 'AUD/USD', 'type': 'Forex', 'decimals': 5, 'mt5_symbol': 'AUDUSD'},
+    'USDCAD=X': {'name': 'USD/CAD', 'type': 'Forex', 'decimals': 5, 'mt5_symbol': 'USDCAD'},
+    'USDCHF=X': {'name': 'USD/CHF', 'type': 'Forex', 'decimals': 5, 'mt5_symbol': 'USDCHF'},
+    'NZDUSD=X': {'name': 'NZD/USD', 'type': 'Forex', 'decimals': 5, 'mt5_symbol': 'NZDUSD'},
     
     # Indices
-    '^DJI': {'name': '🇺🇸 US30 (Dow Jones)', 'type': 'Index', 'decimals': 2},
-    '^NDX': {'name': '🇺🇸 US100 (NASDAQ)', 'type': 'Index', 'decimals': 2},
-    '^GSPC': {'name': '🇺🇸 S&P 500', 'type': 'Index', 'decimals': 2},
+    '^DJI': {'name': '🇺🇸 US30', 'type': 'Index', 'decimals': 2, 'mt5_symbol': 'US30'},
+    '^NDX': {'name': '🇺🇸 US100', 'type': 'Index', 'decimals': 2, 'mt5_symbol': 'NAS100'},
     
     # Commodities
-    'GC=F': {'name': '🥇 Gold (XAU/USD)', 'type': 'Commodity', 'decimals': 2},
-    'SI=F': {'name': '🥈 Silver', 'type': 'Commodity', 'decimals': 3},
+    'GC=F': {'name': '🥇 Gold', 'type': 'Commodity', 'decimals': 2, 'mt5_symbol': 'XAUUSD'},
 }
 
+# ============================================
+# TRADE EXECUTION FUNCTIONS
+# ============================================
+def calculate_lot_size(account_balance, risk_percent, stop_loss_pips, symbol_info):
+    """Calculate position size based on risk"""
+    risk_amount = account_balance * (risk_percent / 100)
+    
+    # Get tick value for the symbol
+    tick_value = symbol_info.trade_tick_value
+    tick_size = symbol_info.trade_tick_size
+    
+    # Calculate lot size
+    lot_size = risk_amount / (stop_loss_pips * tick_value * 10)
+    
+    # Round to allowed step size
+    lot_step = symbol_info.volume_step
+    lot_size = round(lot_size / lot_step) * lot_step
+    
+    # Apply min/max limits
+    lot_size = max(symbol_info.volume_min, min(lot_size, symbol_info.volume_max))
+    
+    return lot_size
+
+def place_mt5_order(symbol, action, volume, price, sl, tp, comment="Forex Bot"):
+    """Place order in MetaTrader 5"""
+    try:
+        # Get symbol info
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            return False, "Symbol not found"
+        
+        # Ensure symbol is visible
+        if not symbol_info.visible:
+            if not mt5.symbol_select(symbol, True):
+                return False, "Cannot select symbol"
+        
+        # Prepare order request
+        if action == "BUY":
+            order_type = mt5.ORDER_TYPE_BUY
+            price = mt5.symbol_info_tick(symbol).ask
+        else:
+            order_type = mt5.ORDER_TYPE_SELL
+            price = mt5.symbol_info_tick(symbol).bid
+        
+        # Create order request
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "price": price,
+            "sl": sl,
+            "tp": tp,
+            "deviation": 10,
+            "magic": 123456,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        # Send order
+        result = mt5.order_send(request)
+        
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return False, f"Order failed: {result.comment}"
+        
+        return True, result.order
+        
+    except Exception as e:
+        return False, str(e)
+
+def close_position(position):
+    """Close an open position"""
+    try:
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": position.symbol,
+            "volume": position.volume,
+            "type": mt5.ORDER_TYPE_BUY if position.type == 1 else mt5.ORDER_TYPE_SELL,
+            "position": position.ticket,
+            "price": mt5.symbol_info_tick(position.symbol).bid if position.type == 0 else mt5.symbol_info_tick(position.symbol).ask,
+            "deviation": 10,
+            "magic": 123456,
+            "comment": "Close by bot",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        result = mt5.order_send(request)
+        return result.retcode == mt5.TRADE_RETCODE_DONE
+        
+    except Exception as e:
+        return False
+
+def get_open_positions():
+    """Get all open positions"""
+    positions = mt5.positions_get()
+    return positions if positions else []
+
+def update_trailing_stops():
+    """Update trailing stops for open positions"""
+    if not USE_TRAILING_STOP:
+        return
+    
+    positions = get_open_positions()
+    for pos in positions:
+        current_price = mt5.symbol_info_tick(pos.symbol).bid if pos.type == 0 else mt5.symbol_info_tick(pos.symbol).ask
+        
+        if pos.type == 0:  # BUY position
+            trailing_distance = 50  # 50 pips
+            new_sl = current_price - (trailing_distance * 0.0001)
+            if new_sl > pos.sl:
+                modify_order(pos.ticket, new_sl, pos.tp)
+        else:  # SELL position
+            trailing_distance = 50
+            new_sl = current_price + (trailing_distance * 0.0001)
+            if new_sl < pos.sl:
+                modify_order(pos.ticket, new_sl, pos.tp)
+
+def modify_order(position_ticket, new_sl, new_tp):
+    """Modify existing order"""
+    try:
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": position_ticket,
+            "sl": new_sl,
+            "tp": new_tp,
+        }
+        result = mt5.order_send(request)
+        return result.retcode == mt5.TRADE_RETCODE_DONE
+    except:
+        return False
+
+# ============================================
+# ANALYSIS FUNCTIONS
+# ============================================
 def analyze_instrument(symbol, instrument_info):
-    """Analyze a single instrument and return signal data"""
+    """Analyze instrument and generate signal"""
     try:
         name = instrument_info['name']
         instrument_type = instrument_info['type']
         
-        # Adjust period based on instrument type
+        # Fetch data
         if instrument_type == 'Index':
             df = yf.Ticker(symbol).history(period='1mo', interval='1h')
         elif instrument_type == 'Commodity':
@@ -55,21 +226,21 @@ def analyze_instrument(symbol, instrument_info):
         sma20 = df['Close'].rolling(20).mean().iloc[-1]
         sma50 = df['Close'].rolling(50).mean().iloc[-1] if len(df) >= 50 else sma20
         
-        # RSI Calculation
+        # RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs)).iloc[-1]
         
-        # MACD Calculation
+        # MACD
         exp1 = df['Close'].ewm(span=12, adjust=False).mean()
         exp2 = df['Close'].ewm(span=26, adjust=False).mean()
         macd = exp1 - exp2
         macd_signal = macd.ewm(span=9, adjust=False).mean()
         macd_histogram = (macd - macd_signal).iloc[-1]
         
-        # ATR for volatility
+        # ATR
         high_low = df['High'] - df['Low']
         high_close = abs(df['High'] - df['Close'].shift())
         low_close = abs(df['Low'] - df['Close'].shift())
@@ -77,23 +248,20 @@ def analyze_instrument(symbol, instrument_info):
         atr = tr.rolling(14).mean().iloc[-1]
         atr_percent = (atr / current) * 100
         
-        # Determine signal with scoring
+        # Generate signal
         buy_score = 0
         sell_score = 0
         
-        # Price vs SMA20
         if current > sma20:
             buy_score += 1
         else:
             sell_score += 1
         
-        # SMA20 vs SMA50 (trend)
         if sma20 > sma50:
             buy_score += 1
         else:
             sell_score += 1
         
-        # RSI signals
         if rsi < 30:
             buy_score += 2
         elif rsi > 70:
@@ -103,87 +271,140 @@ def analyze_instrument(symbol, instrument_info):
         elif rsi > 55:
             sell_score += 1
         
-        # MACD signals
         if macd_histogram > 0:
             buy_score += 1
         else:
             sell_score += 1
         
-        # Determine final signal
+        # Determine signal
         if buy_score > sell_score and buy_score >= 2:
-            signal = "🟢 BUY"
-            action = "BUY"
+            signal = "BUY"
+            signal_emoji = "🟢"
             confidence = min(90, 50 + (buy_score * 10))
-            signal_strength = "Strong" if buy_score >= 4 else "Moderate"
         elif sell_score > buy_score and sell_score >= 2:
-            signal = "🔴 SELL"
-            action = "SELL"
+            signal = "SELL"
+            signal_emoji = "🔴"
             confidence = min(90, 50 + (sell_score * 10))
-            signal_strength = "Strong" if sell_score >= 4 else "Moderate"
         else:
-            signal = "⚖️ NEUTRAL"
-            action = "NEUTRAL"
+            signal = "NEUTRAL"
+            signal_emoji = "⚖️"
             confidence = 0
-            signal_strength = "None"
         
-        # Calculate trade levels for signals
+        # Calculate trade levels
         stop_loss = None
         take_profit = None
-        risk_reward = None
         
-        if action != "NEUTRAL":
-            if action == "BUY":
+        if signal != "NEUTRAL":
+            if signal == "BUY":
                 stop_loss = current - (atr * 1.5)
                 take_profit = current + (atr * 2.5)
             else:
                 stop_loss = current + (atr * 1.5)
                 take_profit = current - (atr * 2.5)
-            
-            risk = abs(current - stop_loss)
-            reward = abs(take_profit - current)
-            risk_reward = round(reward / risk, 2) if risk > 0 else 0
         
-        # Price change
-        price_change = ((current - prev_close) / prev_close) * 100
-        
-        # Format price based on instrument
-        decimals = instrument_info['decimals']
-        if decimals == 2:
-            price_str = f"{current:,.2f}"
-        elif decimals == 3:
-            price_str = f"{current:.3f}"
-        else:
-            price_str = f"{current:.5f}"
+        # Check if position exists
+        has_position = False
+        if mt5_connected and AUTO_TRADE:
+            positions = get_open_positions()
+            for pos in positions:
+                if pos.symbol == instrument_info['mt5_symbol']:
+                    has_position = True
+                    break
         
         return {
             'symbol': symbol,
             'name': name,
             'type': instrument_type,
             'price': current,
-            'price_str': price_str,
-            'price_change': price_change,
+            'price_str': f"{current:.5f}" if instrument_type == 'Forex' else f"{current:.2f}",
             'signal': signal,
-            'action': action,
+            'signal_emoji': signal_emoji,
             'confidence': confidence,
-            'signal_strength': signal_strength,
             'rsi': rsi,
             'sma20': sma20,
             'sma50': sma50,
             'macd_histogram': macd_histogram,
-            'atr': atr,
             'atr_percent': atr_percent,
             'stop_loss': stop_loss,
             'take_profit': take_profit,
-            'risk_reward': risk_reward,
-            'buy_score': buy_score,
-            'sell_score': sell_score
+            'has_position': has_position,
+            'mt5_symbol': instrument_info['mt5_symbol']
         }
         
     except Exception as e:
-        st.error(f"{name}: Error - {str(e)}")
         return None
 
-# Analyze all instruments
+# ============================================
+# TRADE MANAGEMENT
+# ============================================
+def execute_trades(results):
+    """Execute trades based on signals"""
+    if not AUTO_TRADE or not mt5_connected:
+        return
+    
+    current_positions = get_open_positions()
+    positions_count = len(current_positions) if current_positions else 0
+    
+    # Don't exceed max positions
+    if positions_count >= MAX_POSITIONS:
+        return
+    
+    # Get account info
+    account_info = mt5.account_info()
+    if not account_info:
+        return
+    
+    for r in results:
+        if r['signal'] == 'NEUTRAL' or r['has_position']:
+            continue
+        
+        # Check if we should trade this symbol
+        if positions_count >= MAX_POSITIONS:
+            break
+        
+        # Get symbol info
+        symbol_info = mt5.symbol_info(r['mt5_symbol'])
+        if not symbol_info:
+            continue
+        
+        # Calculate pips for stop loss
+        if r['signal'] == 'BUY':
+            stop_loss_pips = abs(r['price'] - r['stop_loss']) * 10000
+        else:
+            stop_loss_pips = abs(r['price'] - r['stop_loss']) * 10000
+        
+        # Calculate position size
+        lot_size = calculate_lot_size(account_info.balance, RISK_PERCENT, stop_loss_pips, symbol_info)
+        
+        if lot_size <= 0:
+            continue
+        
+        # Place order
+        success, result = place_mt5_order(
+            r['mt5_symbol'],
+            r['signal'],
+            lot_size,
+            r['price'],
+            r['stop_loss'],
+            r['take_profit'],
+            f"Forex Bot - {r['signal']}"
+        )
+        
+        if success:
+            positions_count += 1
+            st.success(f"✅ {r['signal']} order placed for {r['name']}")
+        else:
+            st.error(f"❌ Failed to place order for {r['name']}: {result}")
+
+# ============================================
+# MAIN APP
+# ============================================
+st.markdown("---")
+
+# Auto-refresh toggle
+auto_refresh = st.checkbox("🔄 Auto-refresh every 5 minutes", value=False)
+
+# Analyze markets
 with st.spinner("Analyzing markets..."):
     results = []
     for symbol, info in pairs.items():
@@ -191,257 +412,95 @@ with st.spinner("Analyzing markets..."):
         if result:
             results.append(result)
 
+# Update trailing stops
+if AUTO_TRADE and mt5_connected and USE_TRAILING_STOP:
+    update_trailing_stops()
+
+# Execute trades based on signals
+if AUTO_TRADE and mt5_connected:
+    execute_trades(results)
+    
+    # Show open positions
+    st.subheader("📊 Open Positions")
+    positions = get_open_positions()
+    if positions:
+        pos_data = []
+        for pos in positions:
+            pos_data.append({
+                'Symbol': pos.symbol,
+                'Type': 'BUY' if pos.type == 0 else 'SELL',
+                'Volume': pos.volume,
+                'Open Price': pos.price_open,
+                'Current Price': pos.price_current,
+                'Profit': f"${pos.profit:.2f}",
+                'Stop Loss': pos.sl,
+                'Take Profit': pos.tp
+            })
+        st.dataframe(pd.DataFrame(pos_data), use_container_width=True)
+    else:
+        st.info("No open positions")
+
 # ============================================
-# TABLE 1: TRADE SIGNALS - WHAT TO BUY/SELL
+# DISPLAY TRADE SIGNALS TABLE
 # ============================================
 st.markdown("## 🎯 TRADE SIGNALS")
-st.markdown("### What to Buy / Sell Now")
 
-# Filter actionable signals
-actionable_signals = [r for r in results if r['action'] != 'NEUTRAL']
+actionable_signals = [r for r in results if r['signal'] != 'NEUTRAL']
 
 if actionable_signals:
-    # Create trade signals dataframe
     trade_df = pd.DataFrame([
         {
-            'Signal': r['signal'],
+            'Signal': f"{r['signal_emoji']} {r['signal']}",
             'Instrument': r['name'],
             'Type': r['type'],
             'Price': r['price_str'],
             'Confidence': f"{r['confidence']}%",
-            'Strength': r['signal_strength'],
             'RSI': f"{r['rsi']:.1f}",
-            'Entry': r['price_str'],
             'Stop Loss': f"{r['stop_loss']:.5f}" if r['stop_loss'] else '-',
             'Take Profit': f"{r['take_profit']:.5f}" if r['take_profit'] else '-',
-            'R:R': f"1:{r['risk_reward']}" if r['risk_reward'] else '-'
+            'Position': "✅ Open" if r['has_position'] else "❌ None"
         }
         for r in actionable_signals
     ])
     
-    # Display signals table
-    st.dataframe(
-        trade_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Signal": st.column_config.TextColumn(width="small"),
-            "Instrument": st.column_config.TextColumn(width="medium"),
-            "Type": st.column_config.TextColumn(width="small"),
-            "Price": st.column_config.TextColumn(width="small"),
-            "Confidence": st.column_config.TextColumn(width="small"),
-            "Strength": st.column_config.TextColumn(width="small"),
-            "RSI": st.column_config.TextColumn(width="small"),
-            "Entry": st.column_config.TextColumn(width="small"),
-            "Stop Loss": st.column_config.TextColumn(width="medium"),
-            "Take Profit": st.column_config.TextColumn(width="medium"),
-            "R:R": st.column_config.TextColumn(width="small"),
-        }
-    )
+    st.dataframe(trade_df, use_container_width=True, hide_index=True)
 else:
-    st.info("⚖️ No strong trade signals at this time. Market is ranging or neutral.")
+    st.info("⚖️ No trade signals at this time")
 
 # ============================================
-# TABLE 2: MARKET OVERVIEW - ALL INSTRUMENTS
-# ============================================
-st.markdown("## 📊 MARKET OVERVIEW")
-st.markdown("### All Instruments Analysis")
-
-# Create overview dataframe
-overview_df = pd.DataFrame([
-    {
-        'Instrument': r['name'],
-        'Type': r['type'],
-        'Price': r['price_str'],
-        'Change %': f"{r['price_change']:+.2f}%",
-        'Signal': r['signal'],
-        'Confidence': f"{r['confidence']}%" if r['confidence'] > 0 else '-',
-        'RSI': f"{r['rsi']:.1f}",
-        'SMA20': f"{r['sma20']:.5f}" if r['type'] == 'Forex' else f"{r['sma20']:.2f}",
-        'SMA50': f"{r['sma50']:.5f}" if r['type'] == 'Forex' else f"{r['sma50']:.2f}",
-        'MACD': f"{r['macd_histogram']:.4f}",
-        'Volatility': f"{r['atr_percent']:.2f}%"
-    }
-    for r in results
-])
-
-# Color code the signal column
-def color_signal(val):
-    if '🟢' in val:
-        return 'background-color: #1a472a; color: #00ff00'
-    elif '🔴' in val:
-        return 'background-color: #471a1a; color: #ff4444'
-    else:
-        return 'background-color: #2a2a2a; color: #ffff00'
-
-# Display overview table with styling
-st.dataframe(
-    overview_df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Instrument": st.column_config.TextColumn(width="medium"),
-        "Type": st.column_config.TextColumn(width="small"),
-        "Price": st.column_config.TextColumn(width="small"),
-        "Change %": st.column_config.TextColumn(width="small"),
-        "Signal": st.column_config.TextColumn(width="small"),
-        "Confidence": st.column_config.TextColumn(width="small"),
-        "RSI": st.column_config.TextColumn(width="small"),
-        "SMA20": st.column_config.TextColumn(width="medium"),
-        "SMA50": st.column_config.TextColumn(width="medium"),
-        "MACD": st.column_config.TextColumn(width="small"),
-        "Volatility": st.column_config.TextColumn(width="small"),
-    }
-)
-
-# ============================================
-# DETAILED ANALYSIS FOR EACH INSTRUMENT
+# DETAILED ANALYSIS
 # ============================================
 st.markdown("## 📈 DETAILED ANALYSIS")
-st.markdown("### Individual Instrument Breakdown")
 
-# Create tabs for different instrument types
-tab1, tab2, tab3 = st.tabs(["💰 Forex Pairs", "📊 Indices", "🥇 Commodities"])
-
-# Filter by type
-forex = [r for r in results if r['type'] == 'Forex']
-indices = [r for r in results if r['type'] == 'Index']
-commodities = [r for r in results if r['type'] == 'Commodity']
-
-with tab1:
-    if forex:
-        for r in forex:
-            with st.expander(f"{r['signal']} {r['name']} - {r['signal']}", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Current Price", r['price_str'], f"{r['price_change']:+.2f}%")
-                    st.metric("RSI", f"{r['rsi']:.1f}", 
-                             delta="Oversold" if r['rsi'] < 30 else ("Overbought" if r['rsi'] > 70 else "Neutral"))
-                    st.metric("ATR Volatility", f"{r['atr_percent']:.2f}%")
-                
-                with col2:
-                    st.metric("SMA 20", f"{r['sma20']:.5f}")
-                    st.metric("SMA 50", f"{r['sma50']:.5f}")
-                    st.metric("MACD Histogram", f"{r['macd_histogram']:.4f}")
-                
-                with col3:
-                    if r['action'] != 'NEUTRAL':
-                        st.metric("Signal Strength", r['signal_strength'])
-                        st.metric("Confidence", f"{r['confidence']}%")
-                        st.metric("Risk/Reward", f"1:{r['risk_reward']}" if r['risk_reward'] else '-')
-                
-                if r['action'] != 'NEUTRAL':
-                    st.markdown("---")
-                    st.markdown("**🎯 Trade Plan:**")
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.info(f"🚀 **Entry:** {r['price_str']}")
-                    with col_b:
-                        st.warning(f"🛑 **Stop Loss:** {r['stop_loss']:.5f}")
-                    with col_c:
-                        st.success(f"🎯 **Take Profit:** {r['take_profit']:.5f}")
-    else:
-        st.info("No forex data available")
-
-with tab2:
-    if indices:
-        for r in indices:
-            with st.expander(f"{r['signal']} {r['name']} - {r['signal']}", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Current Price", r['price_str'], f"{r['price_change']:+.2f}%")
-                    st.metric("RSI", f"{r['rsi']:.1f}",
-                             delta="Oversold" if r['rsi'] < 30 else ("Overbought" if r['rsi'] > 70 else "Neutral"))
-                    st.metric("ATR Volatility", f"{r['atr_percent']:.2f}%")
-                
-                with col2:
-                    st.metric("SMA 20", f"{r['sma20']:.2f}")
-                    st.metric("SMA 50", f"{r['sma50']:.2f}")
-                    st.metric("MACD Histogram", f"{r['macd_histogram']:.4f}")
-                
-                with col3:
-                    if r['action'] != 'NEUTRAL':
-                        st.metric("Signal Strength", r['signal_strength'])
-                        st.metric("Confidence", f"{r['confidence']}%")
-                        st.metric("Risk/Reward", f"1:{r['risk_reward']}" if r['risk_reward'] else '-')
-                
-                if r['action'] != 'NEUTRAL':
-                    st.markdown("---")
-                    st.markdown("**🎯 Trade Plan:**")
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.info(f"🚀 **Entry:** {r['price_str']}")
-                    with col_b:
-                        st.warning(f"🛑 **Stop Loss:** {r['stop_loss']:.2f}")
-                    with col_c:
-                        st.success(f"🎯 **Take Profit:** {r['take_profit']:.2f}")
-    else:
-        st.info("No index data available")
-
-with tab3:
-    if commodities:
-        for r in commodities:
-            with st.expander(f"{r['signal']} {r['name']} - {r['signal']}", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Current Price", r['price_str'], f"{r['price_change']:+.2f}%")
-                    st.metric("RSI", f"{r['rsi']:.1f}",
-                             delta="Oversold" if r['rsi'] < 30 else ("Overbought" if r['rsi'] > 70 else "Neutral"))
-                    st.metric("ATR Volatility", f"{r['atr_percent']:.2f}%")
-                
-                with col2:
-                    if r['type'] == 'Commodity':
-                        st.metric("SMA 20", f"{r['sma20']:.2f}")
-                        st.metric("SMA 50", f"{r['sma50']:.2f}")
-                    else:
-                        st.metric("SMA 20", f"{r['sma20']:.3f}")
-                        st.metric("SMA 50", f"{r['sma50']:.3f}")
-                    st.metric("MACD Histogram", f"{r['macd_histogram']:.4f}")
-                
-                with col3:
-                    if r['action'] != 'NEUTRAL':
-                        st.metric("Signal Strength", r['signal_strength'])
-                        st.metric("Confidence", f"{r['confidence']}%")
-                        st.metric("Risk/Reward", f"1:{r['risk_reward']}" if r['risk_reward'] else '-')
-                
-                if r['action'] != 'NEUTRAL':
-                    st.markdown("---")
-                    st.markdown("**🎯 Trade Plan:**")
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.info(f"🚀 **Entry:** {r['price_str']}")
-                    with col_b:
-                        st.warning(f"🛑 **Stop Loss:** {r['stop_loss']:.2f}")
-                    with col_c:
-                        st.success(f"🎯 **Take Profit:** {r['take_profit']:.2f}")
-    else:
-        st.info("No commodity data available")
+for r in results:
+    with st.expander(f"{r['signal_emoji']} {r['name']} - {r['signal'] if r['signal'] != 'NEUTRAL' else 'Monitoring'}"):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Price", r['price_str'])
+            st.metric("RSI", f"{r['rsi']:.1f}")
+            st.metric("Signal", r['signal'])
+        
+        with col2:
+            st.metric("SMA 20", f"{r['sma20']:.5f}" if r['type'] == 'Forex' else f"{r['sma20']:.2f}")
+            st.metric("SMA 50", f"{r['sma50']:.5f}" if r['type'] == 'Forex' else f"{r['sma50']:.2f}")
+            st.metric("MACD", f"{r['macd_histogram']:.4f}")
+        
+        with col3:
+            st.metric("Volatility", f"{r['atr_percent']:.2f}%")
+            if r['confidence'] > 0:
+                st.metric("Confidence", f"{r['confidence']}%")
+            if r['stop_loss'] and r['take_profit']:
+                st.metric("Risk/Reward", f"1:{abs(r['take_profit'] - r['price']) / abs(r['stop_loss'] - r['price']):.1f}")
 
 # ============================================
-# SUMMARY STATISTICS
+# AUTO-REFRESH LOGIC
 # ============================================
-st.markdown("## 📊 SUMMARY STATISTICS")
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    buy_signals = len([r for r in results if r['action'] == 'BUY'])
-    st.metric("🟢 BUY Signals", buy_signals)
-
-with col2:
-    sell_signals = len([r for r in results if r['action'] == 'SELL'])
-    st.metric("🔴 SELL Signals", sell_signals)
-
-with col3:
-    neutral = len([r for r in results if r['action'] == 'NEUTRAL'])
-    st.metric("⚖️ Neutral", neutral)
-
-with col4:
-    avg_confidence = sum(r['confidence'] for r in results if r['confidence'] > 0) / len([r for r in results if r['confidence'] > 0]) if [r for r in results if r['confidence'] > 0] else 0
-    st.metric("Avg Confidence", f"{avg_confidence:.0f}%")
+if auto_refresh:
+    st.markdown("---")
+    st.info("🔄 Auto-refresh enabled - Page will reload every 5 minutes...")
+    time.sleep(300)
+    st.rerun()
 
 # ============================================
 # FOOTER
@@ -449,12 +508,8 @@ with col4:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray;'>
-    <p>⚠️ <b>Educational purposes only</b> - Not financial advice</p>
-    <p>📊 Signals based on: RSI, MACD, Moving Averages, and Volatility (ATR)</p>
-    <p>🔄 Data updates on page refresh | Click refresh button below for latest data</p>
+    <p>⚠️ <b>Educational purposes only</b> - Test on demo account first!</p>
+    <p>🤖 Auto-trading can be enabled in the sidebar</p>
+    <p>📊 Signals based on: RSI, MACD, Moving Averages, and Volatility</p>
 </div>
 """, unsafe_allow_html=True)
-
-# Refresh button
-if st.button("🔄 Refresh Data", use_container_width=True):
-    st.rerun()
