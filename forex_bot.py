@@ -10,6 +10,29 @@ import requests
 st.set_page_config(page_title="Forex Analyzer", layout="wide")
 
 # ============================================
+# DEFINE ALL INSTRUMENTS FIRST (BEFORE USING THEM)
+# ============================================
+pairs = {
+    # Forex Pairs
+    'EURUSD=X': {'name': 'EUR/USD', 'type': 'Forex', 'decimals': 5},
+    'GBPUSD=X': {'name': 'GBP/USD', 'type': 'Forex', 'decimals': 5},
+    'USDJPY=X': {'name': 'USD/JPY', 'type': 'Forex', 'decimals': 3},
+    'AUDUSD=X': {'name': 'AUD/USD', 'type': 'Forex', 'decimals': 5},
+    'USDCAD=X': {'name': 'USD/CAD', 'type': 'Forex', 'decimals': 5},
+    'USDCHF=X': {'name': 'USD/CHF', 'type': 'Forex', 'decimals': 5},
+    'NZDUSD=X': {'name': 'NZD/USD', 'type': 'Forex', 'decimals': 5},
+    
+    # Indices
+    '^DJI': {'name': '🇺🇸 US30 (Dow Jones)', 'type': 'Index', 'decimals': 2},
+    '^NDX': {'name': '🇺🇸 US100 (NASDAQ)', 'type': 'Index', 'decimals': 2},
+    '^GSPC': {'name': '🇺🇸 S&P 500', 'type': 'Index', 'decimals': 2},
+    
+    # Commodities
+    'GC=F': {'name': '🥇 Gold (XAU/USD)', 'type': 'Commodity', 'decimals': 2},
+    'SI=F': {'name': '🥈 Silver', 'type': 'Commodity', 'decimals': 3},
+}
+
+# ============================================
 # TELEGRAM NOTIFICATION CONFIGURATION
 # ============================================
 # Your Telegram credentials
@@ -311,27 +334,6 @@ current_time = datetime.now()
 st.write(f"⏰ Last update: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
 if st.session_state.auto_refresh:
     st.info("🔄 Auto-refresh enabled - Page updates every 60 seconds")
-
-# Define all instruments
-pairs = {
-    # Forex Pairs
-    'EURUSD=X': {'name': 'EUR/USD', 'type': 'Forex', 'decimals': 5},
-    'GBPUSD=X': {'name': 'GBP/USD', 'type': 'Forex', 'decimals': 5},
-    'USDJPY=X': {'name': 'USD/JPY', 'type': 'Forex', 'decimals': 3},
-    'AUDUSD=X': {'name': 'AUD/USD', 'type': 'Forex', 'decimals': 5},
-    'USDCAD=X': {'name': 'USD/CAD', 'type': 'Forex', 'decimals': 5},
-    'USDCHF=X': {'name': 'USD/CHF', 'type': 'Forex', 'decimals': 5},
-    'NZDUSD=X': {'name': 'NZD/USD', 'type': 'Forex', 'decimals': 5},
-    
-    # Indices
-    '^DJI': {'name': '🇺🇸 US30 (Dow Jones)', 'type': 'Index', 'decimals': 2},
-    '^NDX': {'name': '🇺🇸 US100 (NASDAQ)', 'type': 'Index', 'decimals': 2},
-    '^GSPC': {'name': '🇺🇸 S&P 500', 'type': 'Index', 'decimals': 2},
-    
-    # Commodities
-    'GC=F': {'name': '🥇 Gold (XAU/USD)', 'type': 'Commodity', 'decimals': 2},
-    'SI=F': {'name': '🥈 Silver', 'type': 'Commodity', 'decimals': 3},
-}
 
 def analyze_instrument(symbol, instrument_info):
     """Analyze a single instrument and return signal data"""
@@ -652,16 +654,16 @@ if actionable_signals:
         <div style="background: {card_color}; border-left: 5px solid {border_color}; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
             <h2>{r['signal']} {r['name']}</h2>
             <table style="width: 100%;">
-                <tr>
+                 <tr>
                     <td><b>💰 Price:</b> {r['price_str']}</td>
                     <td><b>🎯 Confidence:</b> {r['confidence']}%</td>
                     <td><b>📊 RSI:</b> {r['rsi']:.1f}</td>
-                </tr>
-                <tr>
+                 </tr>
+                 <tr>
                     <td><b>🛑 Stop Loss:</b> {sl_display}</td>
                     <td><b>🎯 Take Profit:</b> {tp_display}</td>
                     <td><b>📈 Risk/Reward:</b> {rr_display}</td>
-                </tr>
+                 </tr>
             </table>
         </div>
         """, unsafe_allow_html=True)
