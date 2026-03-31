@@ -12,16 +12,20 @@ st.set_page_config(page_title="Forex Analyzer", layout="wide")
 # ============================================
 # TELEGRAM NOTIFICATION CONFIGURATION
 # ============================================
-# Your Telegram credentials
-TELEGRAM_TOKEN = "8773664334:AAE4fd4Wpyd2ZQkWBsjlPby7qSGKp00jGng"
-TELEGRAM_CHAT_ID = "2057396237"
+# Main Bot (All Instruments)
+MAIN_BOT_TOKEN = "8773664334:AAE4fd4Wpyd2ZQkWBsjlPby7qSGKp00jGng"
+MAIN_BOT_CHAT_ID = "2057396237"
 
-def send_telegram_message(message, parse_mode='HTML'):
-    """Send message to Telegram"""
+# Gold-Only Bot (Dedicated Bot for Gold)
+GOLD_BOT_TOKEN = "8686418191:AAHtEBJ9Lyehb3geZS1WwWukmYZatqpAe-A"
+GOLD_BOT_CHAT_ID = "2057396237"  # Same chat ID or different if you want separate
+
+def send_telegram_message(token, chat_id, message, parse_mode='HTML'):
+    """Send message to Telegram using specified bot"""
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {
-            'chat_id': TELEGRAM_CHAT_ID,
+            'chat_id': chat_id,
             'text': message,
             'parse_mode': parse_mode
         }
@@ -31,22 +35,18 @@ def send_telegram_message(message, parse_mode='HTML'):
         st.error(f"Telegram error: {e}")
         return False
 
-def send_telegram_signal(instrument, signal, price, confidence, stop_loss, take_profit, rsi):
-    """Send formatted trade signal to Telegram"""
+def send_main_bot_signal(instrument, signal, price, confidence, stop_loss, take_profit, rsi):
+    """Send formatted trade signal to MAIN Telegram bot"""
     
-    # Choose emoji based on signal
     if signal == "BUY":
         emoji = "🟢"
         action = "BUY"
-        border = "🟢"
     elif signal == "SELL":
         emoji = "🔴"
         action = "SELL"
-        border = "🔴"
     else:
-        return
+        return False
     
-    # Format the message with HTML
     message = f"""
 <b>{emoji} {action} SIGNAL!</b>
 
@@ -65,19 +65,39 @@ def send_telegram_signal(instrument, signal, price, confidence, stop_loss, take_
 <i>⚠️ Educational purposes only</i>
     """.strip()
     
-    # Send the message
-    success = send_telegram_message(message)
-    
-    if success:
-        st.success(f"📱 Telegram notification sent for {instrument} {signal} signal!")
-    else:
-        st.error(f"❌ Failed to send Telegram notification")
-    
-    return success
+    return send_telegram_message(MAIN_BOT_TOKEN, MAIN_BOT_CHAT_ID, message)
 
-# ============================================
-# TEST BUTTON IN SIDEBAR
-# ============================================
+def send_gold_bot_signal(instrument, signal, price, confidence, stop_loss, take_profit, rsi):
+    """Send formatted trade signal to GOLD-ONLY Telegram bot"""
+    
+    if signal == "BUY":
+        emoji = "🟢"
+        action = "BUY"
+    elif signal == "SELL":
+        emoji = "🔴"
+        action = "SELL"
+    else:
+        return False
+    
+    message = f"""
+<b>{emoji} {action} SIGNAL - GOLD!</b>
+
+<b>🥇 Instrument:</b> {instrument}
+<b>💰 Price:</b> {price}
+<b>🎯 Confidence:</b> {confidence}%
+<b>📈 RSI:</b> {rsi:.1f}
+
+<b>📋 Trade Plan:</b>
+• <b>Entry:</b> {price}
+• <b>Stop Loss:</b> {stop_loss}
+• <b>Take Profit:</b> {take_profit}
+
+<b>⏰ Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+<i>⚠️ Educational purposes only</i>
+    """.strip()
+    
+    return send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, message)
 
 # Custom CSS for notifications
 st.markdown("""
@@ -130,9 +150,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📊 Forex & Indices Market Analyzer")
-st.write("Real-time trading signals with Telegram notifications (Educational Only)")
+st.write("Real-time trading signals with Dual Telegram Bots (Main + Gold-Only)")
 
-# Initialize session state for notifications
+# Initialize session state
 if 'previous_signals' not in st.session_state:
     st.session_state.previous_signals = {}
 if 'notifications' not in st.session_state:
@@ -141,8 +161,10 @@ if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 if 'last_update' not in st.session_state:
     st.session_state.last_update = datetime.now()
-if 'telegram_sent' not in st.session_state:
-    st.session_state.telegram_sent = set()  # Track sent signals to avoid duplicates
+if 'main_bot_sent' not in st.session_state:
+    st.session_state.main_bot_sent = set()  # Track sent signals for main bot
+if 'gold_bot_sent' not in st.session_state:
+    st.session_state.gold_bot_sent = set()  # Track sent signals for gold bot
 
 # Sidebar controls
 with st.sidebar:
@@ -152,18 +174,30 @@ with st.sidebar:
     st.session_state.auto_refresh = st.checkbox("🔄 Auto-refresh (every 60 seconds)", 
                                                  value=st.session_state.auto_refresh)
     
-    # Telegram settings
-    st.subheader("📱 Telegram Notifications")
-    st.info(f"Bot: @{TELEGRAM_TOKEN.split(':')[0]}")
-    st.caption(f"Chat ID: {TELEGRAM_CHAT_ID}")
+    # Telegram Bots Status
+    st.subheader("🤖 Telegram Bots")
     
-    # Test Telegram button
-    if st.button("📨 Send Test Telegram Message", use_container_width=True):
-        test_msg = f"✅ <b>Forex Bot is Online!</b>\n\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n📊 Monitoring {len(pairs)} instruments\n🎯 Min Confidence: {min_confidence_notify}%\n\n🔔 You will receive signals here when they appear!"
-        if send_telegram_message(test_msg):
-            st.success("✅ Test message sent! Check your Telegram!")
+    # Main Bot Status
+    st.markdown("**📱 Main Bot (All Instruments)**")
+    st.caption(f"Token: {MAIN_BOT_TOKEN[:15]}...")
+    if st.button("📨 Test Main Bot", key="test_main", use_container_width=True):
+        test_msg = f"✅ <b>Main Forex Bot is Online!</b>\n\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n📊 Monitoring all {len(pairs)} instruments"
+        if send_telegram_message(MAIN_BOT_TOKEN, MAIN_BOT_CHAT_ID, test_msg):
+            st.success("✅ Main bot test message sent!")
         else:
-            st.error("❌ Failed to send. Check your token and chat ID.")
+            st.error("❌ Failed to send. Check token.")
+    
+    st.markdown("---")
+    
+    # Gold Bot Status
+    st.markdown("**🥇 Gold-Only Bot**")
+    st.caption(f"Token: {GOLD_BOT_TOKEN[:15]}...")
+    if st.button("📨 Test Gold Bot", key="test_gold", use_container_width=True):
+        test_msg = f"✅ <b>Gold-Only Forex Bot is Online!</b>\n\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n🥇 Monitoring Gold (XAU/USD) only\n\nYou will receive ONLY Gold signals here!"
+        if send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, test_msg):
+            st.success("✅ Gold bot test message sent!")
+        else:
+            st.error("❌ Failed to send. Check token.")
     
     st.markdown("---")
     
@@ -174,6 +208,10 @@ with st.sidebar:
     notify_signal_change = st.checkbox("🔔 Notify on SIGNAL CHANGES", value=True)
     
     min_confidence_notify = st.slider("Minimum confidence for notifications", 50, 90, 65)
+    
+    # Gold-specific settings
+    st.subheader("🥇 Gold Bot Settings")
+    gold_only_notifications = st.checkbox("📱 Send Gold signals to Gold Bot", value=True)
     
     # Sound alerts
     sound_alerts = st.checkbox("🔊 Play sound on new signals", value=False)
@@ -371,21 +409,18 @@ with st.spinner("Analyzing markets..."):
         if result:
             results.append(result)
 
-# Check for signal changes and send Telegram notifications
+# Check for signal changes and send Telegram notifications to BOTH bots
 for r in results:
     if r['action'] != 'NEUTRAL' and r['confidence'] >= min_confidence_notify:
-        # Create a unique key for this signal
+        # Create unique keys
         signal_key = f"{r['symbol']}_{r['action']}_{r['confidence']}"
         
-        # Check if this signal was already sent
-        if signal_key not in st.session_state.telegram_sent:
-            # Check if signal changed from previous
+        # ========== SEND TO MAIN BOT (All Instruments) ==========
+        if signal_key not in st.session_state.main_bot_sent:
             prev = st.session_state.previous_signals.get(r['symbol'], {})
-            
             if prev.get('action') != r['action']:
-                # Send Telegram notification
                 if r['action'] == 'BUY' and notify_buy:
-                    send_telegram_signal(
+                    send_main_bot_signal(
                         r['name'],
                         r['action'],
                         r['price_str'],
@@ -394,10 +429,10 @@ for r in results:
                         f"{r['take_profit']:.5f}",
                         r['rsi']
                     )
-                    st.session_state.telegram_sent.add(signal_key)
+                    st.session_state.main_bot_sent.add(signal_key)
                     
                 elif r['action'] == 'SELL' and notify_sell:
-                    send_telegram_signal(
+                    send_main_bot_signal(
                         r['name'],
                         r['action'],
                         r['price_str'],
@@ -406,7 +441,43 @@ for r in results:
                         f"{r['take_profit']:.5f}",
                         r['rsi']
                     )
-                    st.session_state.telegram_sent.add(signal_key)
+                    st.session_state.main_bot_sent.add(signal_key)
+        
+        # ========== SEND TO GOLD BOT (Only Gold) ==========
+        # Check if this is Gold
+        is_gold = 'Gold' in r['name'] or 'GC=F' in r['symbol']
+        
+        if is_gold and gold_only_notifications:
+            gold_key = f"GOLD_{r['action']}_{r['confidence']}_{int(datetime.now().timestamp() / 3600)}"
+            
+            if gold_key not in st.session_state.gold_bot_sent:
+                prev = st.session_state.previous_signals.get(r['symbol'], {})
+                if prev.get('action') != r['action']:
+                    if r['action'] == 'BUY' and notify_buy:
+                        send_gold_bot_signal(
+                            r['name'],
+                            r['action'],
+                            r['price_str'],
+                            r['confidence'],
+                            f"{r['stop_loss']:.5f}",
+                            f"{r['take_profit']:.5f}",
+                            r['rsi']
+                        )
+                        st.session_state.gold_bot_sent.add(gold_key)
+                        st.success(f"🥇 Gold signal sent to Gold Bot!")
+                        
+                    elif r['action'] == 'SELL' and notify_sell:
+                        send_gold_bot_signal(
+                            r['name'],
+                            r['action'],
+                            r['price_str'],
+                            r['confidence'],
+                            f"{r['stop_loss']:.5f}",
+                            f"{r['take_profit']:.5f}",
+                            r['rsi']
+                        )
+                        st.session_state.gold_bot_sent.add(gold_key)
+                        st.success(f"🥇 Gold signal sent to Gold Bot!")
     
     # Update previous signals
     st.session_state.previous_signals[r['symbol']] = {
@@ -414,9 +485,11 @@ for r in results:
         'confidence': r['confidence']
     }
 
-# Clean old sent signals (keep last 100)
-if len(st.session_state.telegram_sent) > 100:
-    st.session_state.telegram_sent = set(list(st.session_state.telegram_sent)[-100:])
+# Clean old sent signals (keep last 200)
+if len(st.session_state.main_bot_sent) > 200:
+    st.session_state.main_bot_sent = set(list(st.session_state.main_bot_sent)[-200:])
+if len(st.session_state.gold_bot_sent) > 200:
+    st.session_state.gold_bot_sent = set(list(st.session_state.gold_bot_sent)[-200:])
 
 # Check for signal changes and create on-screen notifications
 new_notifications = []
@@ -730,7 +803,7 @@ with tab3:
 # ============================================
 st.markdown("## 📊 SUMMARY STATISTICS")
 
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
     buy_signals = len([r for r in results if r['action'] == 'BUY'])
@@ -754,19 +827,32 @@ with col5:
     else:
         st.metric("Auto-Refresh", "OFF")
 
+with col6:
+    gold_signals = len([r for r in results if 'Gold' in r['name'] and r['action'] != 'NEUTRAL'])
+    st.metric("🥇 Gold Signals", gold_signals)
+
 # Recent notifications log
 if st.session_state.notifications:
     with st.expander("📋 Recent Notifications Log"):
         for notif in st.session_state.notifications[:10]:
             st.write(f"• {notif['message']}")
 
-# Telegram status
-with st.expander("📱 Telegram Status"):
-    st.write(f"**Bot Token:** {TELEGRAM_TOKEN[:20]}...")
-    st.write(f"**Chat ID:** {TELEGRAM_CHAT_ID}")
-    st.write(f"**Signals Sent:** {len(st.session_state.telegram_sent)}")
-    st.write("**Last 5 Signals Sent:**")
-    for sig in list(st.session_state.telegram_sent)[-5:]:
+# Telegram Bots Status
+with st.expander("🤖 Telegram Bots Status"):
+    st.markdown("**📱 Main Bot (All Instruments)**")
+    st.write(f"Token: {MAIN_BOT_TOKEN[:20]}...")
+    st.write(f"Chat ID: {MAIN_BOT_CHAT_ID}")
+    st.write(f"Signals Sent: {len(st.session_state.main_bot_sent)}")
+    
+    st.markdown("---")
+    st.markdown("**🥇 Gold-Only Bot**")
+    st.write(f"Token: {GOLD_BOT_TOKEN[:20]}...")
+    st.write(f"Chat ID: {GOLD_BOT_CHAT_ID}")
+    st.write(f"Gold Signals Sent: {len(st.session_state.gold_bot_sent)}")
+    
+    st.markdown("---")
+    st.markdown("**Last 5 Gold Signals Sent:**")
+    for sig in list(st.session_state.gold_bot_sent)[-5:]:
         st.write(f"• {sig}")
 
 # ============================================
@@ -786,6 +872,7 @@ st.markdown("""
 <div style='text-align: center; color: gray;'>
     <p>⚠️ <b>Educational purposes only</b> - Not financial advice</p>
     <p>📊 Signals based on: RSI, MACD, Moving Averages, and Volatility (ATR)</p>
+    <p>🤖 <b>Two Telegram Bots:</b> Main Bot (All Instruments) + Gold-Only Bot</p>
     <p>📱 Telegram notifications sent to your phone when signals appear</p>
     <p>🔄 Enable auto-refresh in sidebar for live updates</p>
 </div>
