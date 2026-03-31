@@ -10,7 +10,7 @@ import requests
 st.set_page_config(page_title="Forex Analyzer", layout="wide")
 
 # ============================================
-# DEFINE ALL INSTRUMENTS FIRST (BEFORE USING THEM)
+# DEFINE ALL INSTRUMENTS FIRST
 # ============================================
 pairs = {
     # Forex Pairs
@@ -35,11 +35,10 @@ pairs = {
 # ============================================
 # TELEGRAM NOTIFICATION CONFIGURATION
 # ============================================
-# Your Telegram credentials
 TELEGRAM_TOKEN = "8773664334:AAE4fd4Wpyd2ZQkWBsjlPby7qSGKp00jGng"
 TELEGRAM_CHAT_ID = "2057396237"
 
-# Gold-Only Bot (Optional - separate bot for gold)
+# Gold Scalping Bot
 GOLD_BOT_TOKEN = "8686418191:AAHtEBJ9Lyehb3geZS1WwWukmYZatqpAe-A"
 GOLD_BOT_CHAT_ID = "2057396237"
 
@@ -62,13 +61,11 @@ def send_telegram_message(token, chat_id, message, parse_mode='HTML'):
 def send_consolidated_signal(results, min_confidence):
     """Send ONE consolidated message with all strong signals"""
     
-    # Filter strong signals
     strong_signals = [r for r in results if r['action'] != 'NEUTRAL' and r['confidence'] >= min_confidence]
     
     if not strong_signals:
         return False
     
-    # Get market session
     current_hour = datetime.now().hour
     if 8 <= current_hour < 16:
         session = "🇬🇧 London Session"
@@ -80,7 +77,6 @@ def send_consolidated_signal(results, min_confidence):
         session = "🌏 Asian Session"
         session_emoji = "🌏"
     
-    # Build consolidated message
     message = f"""
 <b>📊 DAILY FOREX SIGNAL REPORT</b>
 {session_emoji} {session} • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
@@ -90,7 +86,6 @@ def send_consolidated_signal(results, min_confidence):
 
 """
     
-    # Add each signal
     for i, r in enumerate(strong_signals, 1):
         if r['action'] == 'BUY':
             emoji = "🟢"
@@ -99,10 +94,8 @@ def send_consolidated_signal(results, min_confidence):
             emoji = "🔴"
             action = "SELL"
         
-        # Format price and trade levels safely
         price_display = r['price_str']
         
-        # Safely format stop loss and take profit
         if r['stop_loss'] is not None:
             if r['type'] == 'Forex':
                 sl_display = f"{r['stop_loss']:.5f}"
@@ -114,7 +107,6 @@ def send_consolidated_signal(results, min_confidence):
             sl_display = "N/A"
             tp_display = "N/A"
         
-        # Safely format risk/reward
         rr_display = f"1:{r['risk_reward']}" if r['risk_reward'] else "N/A"
         
         message += f"""
@@ -127,91 +119,215 @@ def send_consolidated_signal(results, min_confidence):
    └─ 📈 Risk/Reward: {rr_display}
 """
     
-    # Add trading tips
     message += f"""
 {'='*40}
 <b>📝 QUICK TRADING TIPS:</b>
 • Risk 1-2% per trade
 • Wait for confirmation candle
 • Use proper position sizing
-• Set alerts at key levels
 
 <i>⚠️ Educational purposes only - Manage risk!</i>
 """
     
-    # Send to main bot
     success1 = send_telegram_message(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, message)
-    
-    # Also send gold signals to gold bot if any
-    gold_signals = [r for r in strong_signals if 'Gold' in r['name']]
-    if gold_signals and GOLD_BOT_TOKEN:
-        gold_message = f"""
-<b>🥇 GOLD DAILY SIGNAL REPORT</b>
-{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
-{'='*30}
-
-<b>🎯 GOLD SIGNALS: {len(gold_signals)}</b>
-"""
-        for i, r in enumerate(gold_signals, 1):
-            if r['action'] == 'BUY':
-                emoji = "🟢"
-            else:
-                emoji = "🔴"
-            
-            sl_display = f"{r['stop_loss']:.2f}" if r['stop_loss'] else "N/A"
-            tp_display = f"{r['take_profit']:.2f}" if r['take_profit'] else "N/A"
-            
-            gold_message += f"""
-{emoji} <b>#{i} {r['action']} {r['name']}</b>
-   └─ 💰 Price: {r['price_str']}
-   └─ 🎯 Confidence: {r['confidence']}%
-   └─ 📊 RSI: {r['rsi']:.1f}
-   └─ 🛑 Stop: {sl_display}
-   └─ 🎯 Target: {tp_display}
-"""
-        
-        gold_message += "\n<i>⚠️ Educational purposes only</i>"
-        send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, gold_message)
-    
     return success1
 
-def send_daily_summary(results):
-    """Send daily summary at end of day"""
-    total_signals = len([r for r in results if r['action'] != 'NEUTRAL'])
-    buy_signals = len([r for r in results if r['action'] == 'BUY'])
-    sell_signals = len([r for r in results if r['action'] == 'SELL'])
-    
-    summary = f"""
-<b>📅 DAILY TRADING SUMMARY</b>
-📊 Date: {datetime.now().strftime('%Y-%m-%d')}
-{'='*30}
+# ============================================
+# GOLD SCALPING FUNCTIONS
+# ============================================
 
-<b>📈 Signal Statistics:</b>
-• Total Signals: {total_signals}
-• 🟢 BUY Signals: {buy_signals}
-• 🔴 SELL Signals: {sell_signals}
-• ⚖️ Neutral: {len(results) - total_signals}
+def analyze_gold_scalp():
+    """Analyze Gold for scalping opportunities using multiple timeframes"""
+    try:
+        # Fetch data for multiple timeframes
+        df_1m = yf.Ticker('GC=F').history(period='1d', interval='1m')  # 1-minute
+        df_5m = yf.Ticker('GC=F').history(period='1d', interval='5m')  # 5-minute
+        df_15m = yf.Ticker('GC=F').history(period='1d', interval='15m') # 15-minute
+        
+        if len(df_1m) < 20:
+            return None
+        
+        # Current price
+        current = df_1m['Close'].iloc[-1]
+        
+        # 1-minute indicators
+        sma_5_1m = df_1m['Close'].rolling(5).mean().iloc[-1]
+        sma_10_1m = df_1m['Close'].rolling(10).mean().iloc[-1]
+        sma_20_1m = df_1m['Close'].rolling(20).mean().iloc[-1]
+        
+        # RSI for 1-minute
+        delta = df_1m['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(7).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(7).mean()
+        rs = gain / loss
+        rsi_1m = 100 - (100 / (1 + rs)).iloc[-1]
+        
+        # ATR for 1-minute
+        high_low = df_1m['High'] - df_1m['Low']
+        high_close = abs(df_1m['High'] - df_1m['Close'].shift())
+        low_close = abs(df_1m['Low'] - df_1m['Close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr_1m = tr.rolling(7).mean().iloc[-1]
+        
+        # Volume spike
+        volume_sma = df_1m['Volume'].rolling(10).mean().iloc[-1]
+        volume_ratio = df_1m['Volume'].iloc[-1] / volume_sma if volume_sma > 0 else 1
+        
+        # 5-minute indicators
+        if len(df_5m) > 5:
+            sma_5_5m = df_5m['Close'].rolling(5).mean().iloc[-1]
+            sma_10_5m = df_5m['Close'].rolling(10).mean().iloc[-1]
+            
+            # 5m RSI
+            delta_5m = df_5m['Close'].diff()
+            gain_5m = (delta_5m.where(delta_5m > 0, 0)).rolling(7).mean()
+            loss_5m = (-delta_5m.where(delta_5m < 0, 0)).rolling(7).mean()
+            rs_5m = gain_5m / loss_5m
+            rsi_5m = 100 - (100 / (1 + rs_5m)).iloc[-1]
+        else:
+            sma_5_5m = current
+            sma_10_5m = current
+            rsi_5m = 50
+        
+        # 15-minute trend
+        if len(df_15m) > 5:
+            sma_20_15m = df_15m['Close'].rolling(20).mean().iloc[-1]
+            trend_15m = "UP" if current > sma_20_15m else "DOWN"
+        else:
+            trend_15m = "NEUTRAL"
+        
+        # Scalping signal scoring
+        buy_score = 0
+        sell_score = 0
+        
+        # 1-minute EMAs (fast scalping)
+        if current > sma_5_1m and current > sma_10_1m:
+            buy_score += 2
+        elif current < sma_5_1m and current < sma_10_1m:
+            sell_score += 2
+        
+        # RSI for scalping (tighter thresholds)
+        if rsi_1m < 25:
+            buy_score += 3
+        elif rsi_1m > 75:
+            sell_score += 3
+        elif rsi_1m < 35:
+            buy_score += 1
+        elif rsi_1m > 65:
+            sell_score += 1
+        
+        # Volume confirmation
+        if volume_ratio > 1.5:
+            if current > df_1m['Open'].iloc[-1]:
+                buy_score += 2
+            else:
+                sell_score += 2
+        
+        # 5-minute momentum
+        if sma_5_5m > sma_10_5m and rsi_5m < 70:
+            buy_score += 1
+        elif sma_5_5m < sma_10_5m and rsi_5m > 30:
+            sell_score += 1
+        
+        # 15-minute trend alignment
+        if trend_15m == "UP" and current > sma_20_1m:
+            buy_score += 1
+        elif trend_15m == "DOWN" and current < sma_20_1m:
+            sell_score += 1
+        
+        # Determine signal
+        if buy_score > sell_score and buy_score >= 3:
+            signal = "BUY"
+            confidence = min(95, 55 + (buy_score * 8))
+            signal_emoji = "🟢⚡"
+            # Tight stops for scalping
+            stop_loss = current - (atr_1m * 1.2)
+            take_profit = current + (atr_1m * 1.8)
+        elif sell_score > buy_score and sell_score >= 3:
+            signal = "SELL"
+            confidence = min(95, 55 + (sell_score * 8))
+            signal_emoji = "🔴⚡"
+            stop_loss = current + (atr_1m * 1.2)
+            take_profit = current - (atr_1m * 1.8)
+        else:
+            signal = "NEUTRAL"
+            confidence = 0
+            signal_emoji = "⏸️"
+            stop_loss = None
+            take_profit = None
+        
+        # Calculate risk/reward
+        risk_reward = None
+        if signal != "NEUTRAL":
+            risk = abs(current - stop_loss)
+            reward = abs(take_profit - current)
+            risk_reward = round(reward / risk, 2) if risk > 0 else 0
+        
+        return {
+            'price': current,
+            'price_str': f"${current:.2f}",
+            'signal': signal,
+            'signal_emoji': signal_emoji,
+            'confidence': confidence,
+            'rsi_1m': rsi_1m,
+            'volume_ratio': volume_ratio,
+            'trend_15m': trend_15m,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'risk_reward': risk_reward,
+            'atr': atr_1m,
+            'buy_score': buy_score,
+            'sell_score': sell_score,
+            'timestamp': datetime.now()
+        }
+        
+    except Exception as e:
+        print(f"Gold scalping error: {e}")
+        return None
 
-<b>🎯 Best Signal:</b>
-"""
+def send_gold_scalp_signal(signal_data):
+    """Send gold scalping signal to Telegram"""
+    if not signal_data or signal_data['signal'] == 'NEUTRAL':
+        return False
     
-    # Find best signal
-    strong_signals = [r for r in results if r['action'] != 'NEUTRAL' and r['confidence'] > 0]
-    best = max(strong_signals, key=lambda x: x['confidence']) if strong_signals else None
+    s = signal_data
     
-    if best:
-        summary += f"""
-• Instrument: {best['name']}
-• Action: {best['action']}
-• Confidence: {best['confidence']}%
-• Risk/Reward: 1:{best['risk_reward'] if best['risk_reward'] else 'N/A'}
-"""
+    # Determine signal strength emoji
+    if s['confidence'] >= 80:
+        strength = "🔥 STRONG SCALP"
+    elif s['confidence'] >= 65:
+        strength = "⚡ SCALP OPPORTUNITY"
     else:
-        summary += "• No strong signals today\n"
+        strength = "📊 SCALP ALERT"
     
-    summary += "\n<i>⚠️ Educational purposes only</i>"
+    message = f"""
+<b>{s['signal_emoji']} GOLD SCALPING SIGNAL</b>
+
+<b>{strength}</b>
+<b>Signal:</b> {s['signal']}
+<b>Confidence:</b> {s['confidence']}%
+
+<b>💰 Current Price:</b> {s['price_str']}
+
+<b>⚡ SCALPING LEVELS:</b>
+• <b>Entry:</b> {s['price_str']}
+• <b>Stop Loss:</b> ${s['stop_loss']:.2f}
+• <b>Take Profit:</b> ${s['take_profit']:.2f}
+• <b>Risk/Reward:</b> 1:{s['risk_reward']}
+
+<b>📊 TECHNICALS:</b>
+• <b>RSI (1m):</b> {s['rsi_1m']:.1f}
+• <b>Volume Ratio:</b> {s['volume_ratio']:.1f}x
+• <b>15m Trend:</b> {s['trend_15m']}
+• <b>ATR (1m):</b> ${s['atr']:.2f}
+
+<b>⏰ Time:</b> {s['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} UTC
+
+<i>⚡ Scalping Tip: Quick entry/exit within 1-5 minutes</i>
+<i>⚠️ Educational purposes only - High risk!</i>
+"""
     
-    return summary
+    return send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, message)
 
 # Custom CSS for notifications
 st.markdown("""
@@ -246,25 +362,21 @@ st.markdown("""
     border-left: 5px solid #ff4444;
     color: white;
 }
-.neutral-notification {
-    background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
-    border-left: 5px solid #ffaa00;
+.scalp-buy {
+    background: linear-gradient(135deg, #2a5a2a 0%, #1a3a1a 100%);
+    border-left: 5px solid #ffff00;
     color: white;
 }
-.notification-close {
-    float: right;
-    cursor: pointer;
-    margin-left: 15px;
-    color: #888;
-}
-.notification-close:hover {
+.scalp-sell {
+    background: linear-gradient(135deg, #5a2a2a 0%, #3a1a1a 100%);
+    border-left: 5px solid #ffaa00;
     color: white;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📊 Forex & Indices Market Analyzer")
-st.write("Daily consolidated trading signals with Telegram notifications (Educational Only)")
+st.write("Daily consolidated signals + Gold Scalping Bot (Educational Only)")
 
 # Initialize session state
 if 'previous_signals' not in st.session_state:
@@ -279,6 +391,12 @@ if 'last_signal_sent' not in st.session_state:
     st.session_state.last_signal_sent = None
 if 'last_daily_summary' not in st.session_state:
     st.session_state.last_daily_summary = None
+if 'scalp_mode_enabled' not in st.session_state:
+    st.session_state.scalp_mode_enabled = False
+if 'last_scalp_signal' not in st.session_state:
+    st.session_state.last_scalp_signal = None
+if 'scalp_signal_count' not in st.session_state:
+    st.session_state.scalp_signal_count = 0
 
 # Sidebar controls
 with st.sidebar:
@@ -288,38 +406,91 @@ with st.sidebar:
     st.session_state.auto_refresh = st.checkbox("🔄 Auto-refresh (every 60 seconds)", 
                                                  value=st.session_state.auto_refresh)
     
-    # Telegram settings
-    st.subheader("📱 Telegram Notifications")
+    st.markdown("---")
+    
+    # ============================================
+    # GOLD SCALPING SECTION
+    # ============================================
+    st.header("🥇 GOLD SCALPING MODE")
+    
+    # Big toggle button for scalp mode
+    scalp_toggle = st.toggle(
+        "⚡ ENABLE GOLD SCALPING MODE", 
+        value=st.session_state.scalp_mode_enabled,
+        help="When enabled, you'll receive frequent gold scalping signals (every 1-5 minutes). Turn OFF to avoid overwhelming messages."
+    )
+    
+    if scalp_toggle != st.session_state.scalp_mode_enabled:
+        st.session_state.scalp_mode_enabled = scalp_toggle
+        if scalp_toggle:
+            st.success("✅ Gold Scalping Mode ACTIVATED! You'll receive quick scalp signals.")
+            send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, 
+                "⚡ <b>Gold Scalping Mode ACTIVATED!</b>\n\nYou will now receive frequent gold scalp signals.\n\nTurn off in settings to stop.")
+        else:
+            st.warning("⏸️ Gold Scalping Mode DEACTIVATED")
+            send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, 
+                "⏸️ <b>Gold Scalping Mode DEACTIVATED</b>\n\nYou will no longer receive scalp signals.\n\nTurn on in settings to resume.")
+    
+    # Scalping parameters
+    if st.session_state.scalp_mode_enabled:
+        st.subheader("⚡ Scalping Parameters")
+        min_scalp_confidence = st.slider("Min Scalp Confidence", 50, 90, 60, key="min_scalp_conf")
+        scalp_frequency = st.selectbox("Scalp Signal Frequency", 
+                                       ["Every minute", "Every 2 minutes", "Every 5 minutes"], 
+                                       index=1)
+        
+        st.info(f"""
+        ⚡ **Scalping Mode Active**
+        • Signals every {scalp_frequency}
+        • Min Confidence: {min_scalp_confidence}%
+        • Tight stops (1.2x ATR)
+        • Fast RSI (7-period)
+        """)
+        
+        # Manual scalp check button
+        if st.button("🔍 Check Gold Scalp NOW", use_container_width=True):
+            with st.spinner("Analyzing gold for scalp opportunities..."):
+                scalp_signal = analyze_gold_scalp()
+                if scalp_signal:
+                    if scalp_signal['confidence'] >= min_scalp_confidence:
+                        send_gold_scalp_signal(scalp_signal)
+                        st.success("✅ Scalp signal sent to Telegram!")
+                    else:
+                        st.info(f"⚠️ Signal confidence {scalp_signal['confidence']}% below {min_scalp_confidence}% threshold")
+                else:
+                    st.error("Error analyzing gold")
+    
+    st.markdown("---")
+    
+    # Main bot settings
+    st.subheader("📱 Main Bot Settings")
     st.info(f"Main Bot: @{TELEGRAM_TOKEN.split(':')[0]}")
     
-    # Test Telegram button
-    if st.button("📨 Send Test Consolidated Message", use_container_width=True):
-        test_msg = f"""
-<b>✅ Forex Bot is Online!</b>
-
-📊 <b>System Status:</b>
-• Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-• Monitoring: {len(pairs)} instruments
-• Mode: Consolidated Daily Signals
-
-<i>You will receive ONE daily message with all strong signals</i>
-        """
+    if st.button("📨 Test Main Bot", use_container_width=True):
+        test_msg = f"✅ Main Bot Online! Monitoring {len(pairs)} instruments"
         if send_telegram_message(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, test_msg):
-            st.success("✅ Test message sent! Check your Telegram!")
+            st.success("✅ Test message sent!")
         else:
-            st.error("❌ Failed to send. Check your token and chat ID.")
+            st.error("❌ Failed to send")
+    
+    if st.button("🥇 Test Gold Scalp Bot", use_container_width=True):
+        test_msg = "⚡ Gold Scalp Bot Online! Send a test scalp signal?"
+        if send_telegram_message(GOLD_BOT_TOKEN, GOLD_BOT_CHAT_ID, test_msg):
+            st.success("✅ Test message sent to Gold Bot!")
+        else:
+            st.error("❌ Failed to send")
     
     st.markdown("---")
     
     # Notification settings
     st.subheader("🔔 Signal Settings")
-    min_confidence_notify = st.slider("Minimum confidence for signals", 50, 90, 65)
+    min_confidence_notify = st.slider("Minimum confidence for main signals", 50, 90, 65)
     send_consolidated = st.checkbox("📦 Send ONE consolidated signal message", value=True)
     send_end_of_day = st.checkbox("📅 Send End-of-Day Summary", value=True)
     
     # Signal frequency
-    st.subheader("⏰ Signal Frequency")
-    signal_mode = st.radio("When to send signals:", 
+    st.subheader("⏰ Main Bot Frequency")
+    signal_mode = st.radio("When to send main signals:", 
                           ["Daily (Once per day)", "Every 4 hours", "On every signal change"])
     
     # Manual refresh button
@@ -327,7 +498,7 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
-    st.info("📊 Signals are consolidated into one daily message for day trading")
+    st.caption(f"🥇 Gold Scalping: {'🟢 ACTIVE' if st.session_state.scalp_mode_enabled else '⚪ INACTIVE'}")
 
 # Display current time
 current_time = datetime.now()
@@ -335,6 +506,44 @@ st.write(f"⏰ Last update: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
 if st.session_state.auto_refresh:
     st.info("🔄 Auto-refresh enabled - Page updates every 60 seconds")
 
+# ============================================
+# GOLD SCALPING ANALYSIS (if enabled)
+# ============================================
+if st.session_state.scalp_mode_enabled:
+    # Get scalp frequency in seconds
+    if scalp_frequency == "Every minute":
+        scalp_interval = 60
+    elif scalp_frequency == "Every 2 minutes":
+        scalp_interval = 120
+    else:
+        scalp_interval = 300
+    
+    # Check if it's time for a scalp signal
+    current_minute = datetime.now().minute
+    if scalp_frequency == "Every minute":
+        should_scalp = True
+    elif scalp_frequency == "Every 2 minutes":
+        should_scalp = current_minute % 2 == 0
+    else:
+        should_scalp = current_minute % 5 == 0
+    
+    if should_scalp and st.session_state.last_scalp_signal != datetime.now().strftime('%Y-%m-%d %H:%M'):
+        st.session_state.last_scalp_signal = datetime.now().strftime('%Y-%m-%d %H:%M')
+        
+        with st.spinner("Analyzing gold for scalp opportunities..."):
+            scalp_signal = analyze_gold_scalp()
+            if scalp_signal:
+                if scalp_signal['confidence'] >= min_scalp_confidence:
+                    send_gold_scalp_signal(scalp_signal)
+                    st.session_state.scalp_signal_count += 1
+                    st.toast(f"⚡ Gold scalp signal sent! (Confidence: {scalp_signal['confidence']}%)")
+                else:
+                    # Low confidence - no signal sent
+                    pass
+
+# ============================================
+# MAIN ANALYSIS FUNCTION
+# ============================================
 def analyze_instrument(symbol, instrument_info):
     """Analyze a single instrument and return signal data"""
     try:
@@ -352,7 +561,6 @@ def analyze_instrument(symbol, instrument_info):
         if len(df) < 20:
             return None
 
-        # Calculate indicators
         current = df['Close'].iloc[-1]
         prev_close = df['Close'].iloc[-2]
         sma20 = df['Close'].rolling(20).mean().iloc[-1]
@@ -372,31 +580,27 @@ def analyze_instrument(symbol, instrument_info):
         macd_signal = macd.ewm(span=9, adjust=False).mean()
         macd_histogram = (macd - macd_signal).iloc[-1]
         
-        # ATR for volatility
+        # ATR
         high_low = df['High'] - df['Low']
         high_close = abs(df['High'] - df['Close'].shift())
         low_close = abs(df['Low'] - df['Close'].shift())
         tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         atr = tr.rolling(14).mean().iloc[-1]
-        atr_percent = (atr / current) * 100
         
-        # Determine signal with scoring
+        # Signal scoring
         buy_score = 0
         sell_score = 0
         
-        # Price vs SMA20
         if current > sma20:
             buy_score += 1
         else:
             sell_score += 1
         
-        # SMA20 vs SMA50 (trend)
         if sma20 > sma50:
             buy_score += 1
         else:
             sell_score += 1
         
-        # RSI signals
         if rsi < 30:
             buy_score += 2
         elif rsi > 70:
@@ -406,50 +610,41 @@ def analyze_instrument(symbol, instrument_info):
         elif rsi > 55:
             sell_score += 1
         
-        # MACD signals
         if macd_histogram > 0:
             buy_score += 1
         else:
             sell_score += 1
         
-        # Determine final signal
         if buy_score > sell_score and buy_score >= 2:
             signal = "🟢 BUY"
             action = "BUY"
             confidence = min(90, 50 + (buy_score * 10))
             signal_strength = "Strong" if buy_score >= 4 else "Moderate"
+            stop_loss = current - (atr * 1.5)
+            take_profit = current + (atr * 2.5)
         elif sell_score > buy_score and sell_score >= 2:
             signal = "🔴 SELL"
             action = "SELL"
             confidence = min(90, 50 + (sell_score * 10))
             signal_strength = "Strong" if sell_score >= 4 else "Moderate"
+            stop_loss = current + (atr * 1.5)
+            take_profit = current - (atr * 2.5)
         else:
             signal = "⚖️ NEUTRAL"
             action = "NEUTRAL"
             confidence = 0
             signal_strength = "None"
+            stop_loss = None
+            take_profit = None
         
-        # Calculate trade levels for signals
-        stop_loss = None
-        take_profit = None
         risk_reward = None
-        
         if action != "NEUTRAL":
-            if action == "BUY":
-                stop_loss = current - (atr * 1.5)
-                take_profit = current + (atr * 2.5)
-            else:
-                stop_loss = current + (atr * 1.5)
-                take_profit = current - (atr * 2.5)
-            
             risk = abs(current - stop_loss)
             reward = abs(take_profit - current)
             risk_reward = round(reward / risk, 2) if risk > 0 else 0
         
-        # Price change
         price_change = ((current - prev_close) / prev_close) * 100
         
-        # Format price based on instrument
         decimals = instrument_info['decimals']
         if decimals == 2:
             price_str = f"{current:,.2f}"
@@ -470,20 +665,12 @@ def analyze_instrument(symbol, instrument_info):
             'confidence': confidence,
             'signal_strength': signal_strength,
             'rsi': rsi,
-            'sma20': sma20,
-            'sma50': sma50,
-            'macd_histogram': macd_histogram,
-            'atr': atr,
-            'atr_percent': atr_percent,
             'stop_loss': stop_loss,
             'take_profit': take_profit,
             'risk_reward': risk_reward,
-            'buy_score': buy_score,
-            'sell_score': sell_score
         }
         
     except Exception as e:
-        st.error(f"{name}: Error - {str(e)}")
         return None
 
 # Analyze all instruments
@@ -494,41 +681,52 @@ with st.spinner("Analyzing markets..."):
         if result:
             results.append(result)
 
-# Check for signal changes and send consolidated messages
+# Main bot consolidated messages
 current_hour = datetime.now().hour
 current_day = datetime.now().strftime('%Y-%m-%d')
 
-# Determine if we should send signals based on frequency
 should_send = False
 
 if signal_mode == "Daily (Once per day)":
-    # Send once per day at 8:00 AM and 2:00 PM (key trading times)
     if current_hour in [8, 14] and st.session_state.last_signal_sent != current_day + str(current_hour):
         should_send = True
         st.session_state.last_signal_sent = current_day + str(current_hour)
-        
 elif signal_mode == "Every 4 hours":
-    # Send at 0, 4, 8, 12, 16, 20 hours
     if current_hour % 4 == 0 and st.session_state.last_signal_sent != current_day + str(current_hour):
         should_send = True
         st.session_state.last_signal_sent = current_day + str(current_hour)
-        
-else:  # On every signal change
-    # Check if any signal changed
+else:
     for r in results:
         prev = st.session_state.previous_signals.get(r['symbol'], {})
         if prev.get('action') != r['action'] and r['action'] != 'NEUTRAL':
             should_send = True
             break
 
-# Send consolidated message if needed
 if should_send and send_consolidated:
     send_consolidated_signal(results, min_confidence_notify)
     st.success("📱 Consolidated signal report sent to Telegram!")
 
-# Send end-of-day summary
 if send_end_of_day and current_hour == 21 and st.session_state.last_daily_summary != current_day:
-    summary = send_daily_summary(results)
+    total_signals = len([r for r in results if r['action'] != 'NEUTRAL'])
+    buy_signals = len([r for r in results if r['action'] == 'BUY'])
+    sell_signals = len([r for r in results if r['action'] == 'SELL'])
+    
+    summary = f"""
+<b>📅 DAILY TRADING SUMMARY</b>
+📊 Date: {datetime.now().strftime('%Y-%m-%d')}
+{'='*30}
+
+<b>📈 Signal Statistics:</b>
+• Total Signals: {total_signals}
+• 🟢 BUY Signals: {buy_signals}
+• 🔴 SELL Signals: {sell_signals}
+
+<b>🥇 Gold Scalping Stats:</b>
+• Signals Today: {st.session_state.scalp_signal_count}
+• Mode: {'ACTIVE' if st.session_state.scalp_mode_enabled else 'INACTIVE'}
+
+<i>⚠️ Educational purposes only</i>
+"""
     send_telegram_message(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, summary)
     st.session_state.last_daily_summary = current_day
     st.info("📅 End-of-day summary sent to Telegram!")
@@ -540,94 +738,15 @@ for r in results:
         'confidence': r['confidence']
     }
 
-# Clean old sent signals
-if len(st.session_state.previous_signals) > 200:
-    st.session_state.previous_signals = dict(list(st.session_state.previous_signals.items())[-200:])
-
-# Check for signal changes and create on-screen notifications
-new_notifications = []
-
-for r in results:
-    symbol_key = r['symbol']
-    current_signal = r['action']
-    current_confidence = r['confidence']
-    
-    if symbol_key in st.session_state.previous_signals:
-        prev_signal = st.session_state.previous_signals[symbol_key]['action']
-        prev_confidence = st.session_state.previous_signals[symbol_key]['confidence']
-        
-        # Check if signal changed
-        if prev_signal != current_signal and current_signal != 'NEUTRAL':
-            if current_signal == 'BUY':
-                notification = {
-                    'type': 'buy',
-                    'message': f"🟢 BUY SIGNAL for {r['name']}! Confidence: {current_confidence}%",
-                    'instrument': r['name'],
-                    'price': r['price_str'],
-                    'stop_loss': r['stop_loss'],
-                    'take_profit': r['take_profit']
-                }
-                new_notifications.append(notification)
-            elif current_signal == 'SELL':
-                notification = {
-                    'type': 'sell',
-                    'message': f"🔴 SELL SIGNAL for {r['name']}! Confidence: {current_confidence}%",
-                    'instrument': r['name'],
-                    'price': r['price_str'],
-                    'stop_loss': r['stop_loss'],
-                    'take_profit': r['take_profit']
-                }
-                new_notifications.append(notification)
-
-# Add new notifications to session state
-if new_notifications:
-    st.session_state.notifications = new_notifications + st.session_state.notifications
-    st.session_state.notifications = st.session_state.notifications[:20]
-
-# Display notifications using HTML/JS
-if st.session_state.notifications:
-    notification_html = ""
-    for i, notif in enumerate(st.session_state.notifications[:5]):
-        if notif['type'] == 'buy':
-            notif_class = "buy-notification"
-        elif notif['type'] == 'sell':
-            notif_class = "sell-notification"
-        else:
-            notif_class = "neutral-notification"
-        
-        notification_html += f"""
-        <div class="notification {notif_class}" id="notif_{i}">
-            <strong>{notif['message']}</strong><br>
-            <small>Price: {notif.get('price', 'N/A')}</small>
-            <span class="notification-close" onclick="document.getElementById('notif_{i}').remove()">✕</span>
-        </div>
-        """
-    
-    st.markdown(f"""
-    <div id="notification-container">
-        {notification_html}
-    </div>
-    <script>
-        setTimeout(function() {{
-            var notifications = document.querySelectorAll('.notification');
-            notifications.forEach(function(notif) {{
-                notif.remove();
-            }});
-        }}, 10000);
-    </script>
-    """, unsafe_allow_html=True)
-
 # ============================================
 # DISPLAY TRADE SIGNALS TABLE
 # ============================================
 st.markdown("## 🎯 STRONG TRADE SIGNALS")
 st.markdown("### What to Buy / Sell Today")
 
-# Filter actionable signals
 actionable_signals = [r for r in results if r['action'] != 'NEUTRAL' and r['confidence'] >= min_confidence_notify]
 
 if actionable_signals:
-    # Display as cards for better visibility
     for r in actionable_signals:
         if r['action'] == 'BUY':
             card_color = "#1a472a"
@@ -636,7 +755,6 @@ if actionable_signals:
             card_color = "#471a1a"
             border_color = "#ff4444"
         
-        # Safely format stop loss and take profit
         if r['stop_loss'] is not None:
             if r['type'] == 'Forex':
                 sl_display = f"{r['stop_loss']:.5f}"
@@ -654,28 +772,49 @@ if actionable_signals:
         <div style="background: {card_color}; border-left: 5px solid {border_color}; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
             <h2>{r['signal']} {r['name']}</h2>
             <table style="width: 100%;">
-                 <tr>
+                <tr>
                     <td><b>💰 Price:</b> {r['price_str']}</td>
                     <td><b>🎯 Confidence:</b> {r['confidence']}%</td>
                     <td><b>📊 RSI:</b> {r['rsi']:.1f}</td>
-                 </tr>
-                 <tr>
+                </tr>
+                <tr>
                     <td><b>🛑 Stop Loss:</b> {sl_display}</td>
                     <td><b>🎯 Take Profit:</b> {tp_display}</td>
                     <td><b>📈 Risk/Reward:</b> {rr_display}</td>
-                 </tr>
+                </tr>
             </table>
         </div>
         """, unsafe_allow_html=True)
     
-    # Show consolidated message preview
     st.success(f"📱 **Telegram Notification**: A consolidated message with all {len(actionable_signals)} signals has been sent to your Telegram bot.")
-    
 else:
     st.info(f"⚖️ No strong trade signals above {min_confidence_notify}% confidence at this time.")
 
 # ============================================
-# MARKET OVERVIEW TABLE
+# GOLD SCALPING STATUS CARD
+# ============================================
+st.markdown("## ⚡ GOLD SCALPING STATUS")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    status_color = "🟢" if st.session_state.scalp_mode_enabled else "⚪"
+    st.metric("Scalp Mode", f"{status_color} {'ACTIVE' if st.session_state.scalp_mode_enabled else 'INACTIVE'}")
+
+with col2:
+    st.metric("Signals Today", st.session_state.scalp_signal_count)
+
+with col3:
+    if st.session_state.scalp_mode_enabled:
+        st.metric("Frequency", scalp_frequency)
+    else:
+        st.metric("Status", "Click toggle to enable")
+
+if st.session_state.scalp_mode_enabled:
+    st.info("⚡ **Gold Scalping Mode ACTIVE** - You will receive frequent scalp signals on Telegram. Turn OFF in sidebar to stop.")
+
+# ============================================
+# MARKET OVERVIEW
 # ============================================
 st.markdown("## 📊 MARKET OVERVIEW")
 
@@ -719,10 +858,7 @@ with col4:
     st.metric("Avg Confidence", f"{avg_confidence:.0f}%")
 
 with col5:
-    st.metric("📱 Next Report", signal_mode.replace("Every ", "").replace("On ", ""))
-
-# Signal mode info
-st.info(f"📱 **Signal Mode:** {signal_mode} - You will receive ONE consolidated message with all strong signals")
+    st.metric("🥇 Scalp Signals", st.session_state.scalp_signal_count)
 
 # ============================================
 # AUTO-REFRESH LOGIC
@@ -740,8 +876,8 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray;'>
     <p>⚠️ <b>Educational purposes only</b> - Not financial advice</p>
-    <p>📊 Signals based on: RSI, MACD, Moving Averages, and Volatility (ATR)</p>
-    <p>📱 <b>One consolidated Telegram message</b> sent daily with all strong signals</p>
-    <p>🔄 Enable auto-refresh in sidebar for live updates</p>
+    <p>📊 Main Bot: Daily consolidated signals | ⚡ Gold Bot: Scalping signals (toggle on/off)</p>
+    <p>🥇 <b>Gold Scalping Mode:</b> Toggle ON in sidebar for frequent scalp signals (1-5 minute intervals)</p>
+    <p>🔄 Enable auto-refresh for continuous monitoring</p>
 </div>
 """, unsafe_allow_html=True)
