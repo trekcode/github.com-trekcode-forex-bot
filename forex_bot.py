@@ -72,21 +72,27 @@ def send_consolidated_signal(results, min_confidence):
         if r['action'] == 'BUY':
             emoji = "🟢"
             action = "BUY"
-            border = "🟢"
         else:
             emoji = "🔴"
             action = "SELL"
-            border = "🔴"
         
-        # Format price based on instrument type
-        if r['type'] == 'Forex':
-            price_display = r['price_str']
-            sl_display = f"{r['stop_loss']:.5f}"
-            tp_display = f"{r['take_profit']:.5f}"
+        # Format price and trade levels safely
+        price_display = r['price_str']
+        
+        # Safely format stop loss and take profit
+        if r['stop_loss'] is not None:
+            if r['type'] == 'Forex':
+                sl_display = f"{r['stop_loss']:.5f}"
+                tp_display = f"{r['take_profit']:.5f}" if r['take_profit'] else 'N/A'
+            else:
+                sl_display = f"{r['stop_loss']:.2f}"
+                tp_display = f"{r['take_profit']:.2f}" if r['take_profit'] else 'N/A'
         else:
-            price_display = r['price_str']
-            sl_display = f"{r['stop_loss']:.2f}"
-            tp_display = f"{r['take_profit']:.2f}"
+            sl_display = "N/A"
+            tp_display = "N/A"
+        
+        # Safely format risk/reward
+        rr_display = f"1:{r['risk_reward']}" if r['risk_reward'] else "N/A"
         
         message += f"""
 {emoji} <b>#{i} {action} {r['name']}</b>
@@ -95,7 +101,7 @@ def send_consolidated_signal(results, min_confidence):
    └─ 📊 RSI: {r['rsi']:.1f}
    └─ 🛑 Stop Loss: {sl_display}
    └─ 🎯 Take Profit: {tp_display}
-   └─ 📈 Risk/Reward: 1:{r['risk_reward']}
+   └─ 📈 Risk/Reward: {rr_display}
 """
     
     # Add trading tips
@@ -129,13 +135,16 @@ def send_consolidated_signal(results, min_confidence):
             else:
                 emoji = "🔴"
             
+            sl_display = f"{r['stop_loss']:.2f}" if r['stop_loss'] else "N/A"
+            tp_display = f"{r['take_profit']:.2f}" if r['take_profit'] else "N/A"
+            
             gold_message += f"""
 {emoji} <b>#{i} {r['action']} {r['name']}</b>
    └─ 💰 Price: {r['price_str']}
    └─ 🎯 Confidence: {r['confidence']}%
    └─ 📊 RSI: {r['rsi']:.1f}
-   └─ 🛑 Stop: {r['stop_loss']:.2f}
-   └─ 🎯 Target: {r['take_profit']:.2f}
+   └─ 🛑 Stop: {sl_display}
+   └─ 🎯 Target: {tp_display}
 """
         
         gold_message += "\n<i>⚠️ Educational purposes only</i>"
@@ -164,13 +173,15 @@ def send_daily_summary(results):
 """
     
     # Find best signal
-    best = max([r for r in results if r['action'] != 'NEUTRAL'], key=lambda x: x['confidence']) if total_signals > 0 else None
+    strong_signals = [r for r in results if r['action'] != 'NEUTRAL' and r['confidence'] > 0]
+    best = max(strong_signals, key=lambda x: x['confidence']) if strong_signals else None
+    
     if best:
         summary += f"""
 • Instrument: {best['name']}
 • Action: {best['action']}
 • Confidence: {best['confidence']}%
-• Risk/Reward: 1:{best['risk_reward']}
+• Risk/Reward: 1:{best['risk_reward'] if best['risk_reward'] else 'N/A'}
 """
     else:
         summary += "• No strong signals today\n"
@@ -619,11 +630,23 @@ if actionable_signals:
         if r['action'] == 'BUY':
             card_color = "#1a472a"
             border_color = "#00ff00"
-            bg_light = "#2a5a3a"
         else:
             card_color = "#471a1a"
             border_color = "#ff4444"
-            bg_light = "#5a2a2a"
+        
+        # Safely format stop loss and take profit
+        if r['stop_loss'] is not None:
+            if r['type'] == 'Forex':
+                sl_display = f"{r['stop_loss']:.5f}"
+                tp_display = f"{r['take_profit']:.5f}" if r['take_profit'] else "N/A"
+            else:
+                sl_display = f"{r['stop_loss']:.2f}"
+                tp_display = f"{r['take_profit']:.2f}" if r['take_profit'] else "N/A"
+        else:
+            sl_display = "N/A"
+            tp_display = "N/A"
+        
+        rr_display = f"1:{r['risk_reward']}" if r['risk_reward'] else "N/A"
         
         st.markdown(f"""
         <div style="background: {card_color}; border-left: 5px solid {border_color}; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
@@ -635,16 +658,16 @@ if actionable_signals:
                     <td><b>📊 RSI:</b> {r['rsi']:.1f}</td>
                 </tr>
                 <tr>
-                    <td><b>🛑 Stop Loss:</b> {r['stop_loss']:.5f if r['type'] == 'Forex' else r['stop_loss']:.2f}</td>
-                    <td><b>🎯 Take Profit:</b> {r['take_profit']:.5f if r['type'] == 'Forex' else r['take_profit']:.2f}</td>
-                    <td><b>📈 Risk/Reward:</b> 1:{r['risk_reward']}</td>
+                    <td><b>🛑 Stop Loss:</b> {sl_display}</td>
+                    <td><b>🎯 Take Profit:</b> {tp_display}</td>
+                    <td><b>📈 Risk/Reward:</b> {rr_display}</td>
                 </tr>
             </table>
         </div>
         """, unsafe_allow_html=True)
     
     # Show consolidated message preview
-    st.info(f"📱 **Telegram Notification**: A consolidated message with all {len(actionable_signals)} signals has been sent to your Telegram bot.")
+    st.success(f"📱 **Telegram Notification**: A consolidated message with all {len(actionable_signals)} signals has been sent to your Telegram bot.")
     
 else:
     st.info(f"⚖️ No strong trade signals above {min_confidence_notify}% confidence at this time.")
@@ -689,7 +712,8 @@ with col3:
     st.metric("⚖️ Neutral", neutral)
 
 with col4:
-    avg_confidence = sum(r['confidence'] for r in results if r['confidence'] > 0) / len([r for r in results if r['confidence'] > 0]) if [r for r in results if r['confidence'] > 0] else 0
+    strong_signals = [r for r in results if r['confidence'] > 0]
+    avg_confidence = sum(r['confidence'] for r in strong_signals) / len(strong_signals) if strong_signals else 0
     st.metric("Avg Confidence", f"{avg_confidence:.0f}%")
 
 with col5:
