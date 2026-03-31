@@ -5,8 +5,79 @@ import yfinance as yf
 from datetime import datetime
 import time
 import json
+import requests
 
 st.set_page_config(page_title="Forex Analyzer", layout="wide")
+
+# ============================================
+# TELEGRAM NOTIFICATION CONFIGURATION
+# ============================================
+# Your Telegram credentials
+TELEGRAM_TOKEN = "8773664334:AAE4fd4Wpyd2ZQkWBsjlPby7qSGKp00jGng"
+TELEGRAM_CHAT_ID = "2057396237"
+
+def send_telegram_message(message, parse_mode='HTML'):
+    """Send message to Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': message,
+            'parse_mode': parse_mode
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        st.error(f"Telegram error: {e}")
+        return False
+
+def send_telegram_signal(instrument, signal, price, confidence, stop_loss, take_profit, rsi):
+    """Send formatted trade signal to Telegram"""
+    
+    # Choose emoji based on signal
+    if signal == "BUY":
+        emoji = "🟢"
+        action = "BUY"
+        border = "🟢"
+    elif signal == "SELL":
+        emoji = "🔴"
+        action = "SELL"
+        border = "🔴"
+    else:
+        return
+    
+    # Format the message with HTML
+    message = f"""
+<b>{emoji} {action} SIGNAL!</b>
+
+<b>📊 Instrument:</b> {instrument}
+<b>💰 Price:</b> {price}
+<b>🎯 Confidence:</b> {confidence}%
+<b>📈 RSI:</b> {rsi:.1f}
+
+<b>📋 Trade Plan:</b>
+• <b>Entry:</b> {price}
+• <b>Stop Loss:</b> {stop_loss}
+• <b>Take Profit:</b> {take_profit}
+
+<b>⏰ Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+<i>⚠️ Educational purposes only</i>
+    """.strip()
+    
+    # Send the message
+    success = send_telegram_message(message)
+    
+    if success:
+        st.success(f"📱 Telegram notification sent for {instrument} {signal} signal!")
+    else:
+        st.error(f"❌ Failed to send Telegram notification")
+    
+    return success
+
+# ============================================
+# TEST BUTTON IN SIDEBAR
+# ============================================
 
 # Custom CSS for notifications
 st.markdown("""
@@ -59,7 +130,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📊 Forex & Indices Market Analyzer")
-st.write("Real-time trading signals with live notifications (Educational Only)")
+st.write("Real-time trading signals with Telegram notifications (Educational Only)")
 
 # Initialize session state for notifications
 if 'previous_signals' not in st.session_state:
@@ -70,6 +141,8 @@ if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 if 'last_update' not in st.session_state:
     st.session_state.last_update = datetime.now()
+if 'telegram_sent' not in st.session_state:
+    st.session_state.telegram_sent = set()  # Track sent signals to avoid duplicates
 
 # Sidebar controls
 with st.sidebar:
@@ -79,11 +152,26 @@ with st.sidebar:
     st.session_state.auto_refresh = st.checkbox("🔄 Auto-refresh (every 60 seconds)", 
                                                  value=st.session_state.auto_refresh)
     
+    # Telegram settings
+    st.subheader("📱 Telegram Notifications")
+    st.info(f"Bot: @{TELEGRAM_TOKEN.split(':')[0]}")
+    st.caption(f"Chat ID: {TELEGRAM_CHAT_ID}")
+    
+    # Test Telegram button
+    if st.button("📨 Send Test Telegram Message", use_container_width=True):
+        test_msg = f"✅ <b>Forex Bot is Online!</b>\n\n⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n📊 Monitoring {len(pairs)} instruments\n🎯 Min Confidence: {min_confidence_notify}%\n\n🔔 You will receive signals here when they appear!"
+        if send_telegram_message(test_msg):
+            st.success("✅ Test message sent! Check your Telegram!")
+        else:
+            st.error("❌ Failed to send. Check your token and chat ID.")
+    
+    st.markdown("---")
+    
     # Notification settings
-    st.subheader("🔔 Notification Settings")
+    st.subheader("🔔 Signal Settings")
     notify_buy = st.checkbox("🔔 Notify on BUY signals", value=True)
     notify_sell = st.checkbox("🔔 Notify on SELL signals", value=True)
-    notify_neutral = st.checkbox("🔔 Notify on SIGNAL CHANGES", value=True)
+    notify_signal_change = st.checkbox("🔔 Notify on SIGNAL CHANGES", value=True)
     
     min_confidence_notify = st.slider("Minimum confidence for notifications", 50, 90, 65)
     
@@ -283,7 +371,54 @@ with st.spinner("Analyzing markets..."):
         if result:
             results.append(result)
 
-# Check for signal changes and create notifications
+# Check for signal changes and send Telegram notifications
+for r in results:
+    if r['action'] != 'NEUTRAL' and r['confidence'] >= min_confidence_notify:
+        # Create a unique key for this signal
+        signal_key = f"{r['symbol']}_{r['action']}_{r['confidence']}"
+        
+        # Check if this signal was already sent
+        if signal_key not in st.session_state.telegram_sent:
+            # Check if signal changed from previous
+            prev = st.session_state.previous_signals.get(r['symbol'], {})
+            
+            if prev.get('action') != r['action']:
+                # Send Telegram notification
+                if r['action'] == 'BUY' and notify_buy:
+                    send_telegram_signal(
+                        r['name'],
+                        r['action'],
+                        r['price_str'],
+                        r['confidence'],
+                        f"{r['stop_loss']:.5f}",
+                        f"{r['take_profit']:.5f}",
+                        r['rsi']
+                    )
+                    st.session_state.telegram_sent.add(signal_key)
+                    
+                elif r['action'] == 'SELL' and notify_sell:
+                    send_telegram_signal(
+                        r['name'],
+                        r['action'],
+                        r['price_str'],
+                        r['confidence'],
+                        f"{r['stop_loss']:.5f}",
+                        f"{r['take_profit']:.5f}",
+                        r['rsi']
+                    )
+                    st.session_state.telegram_sent.add(signal_key)
+    
+    # Update previous signals
+    st.session_state.previous_signals[r['symbol']] = {
+        'action': r['action'],
+        'confidence': r['confidence']
+    }
+
+# Clean old sent signals (keep last 100)
+if len(st.session_state.telegram_sent) > 100:
+    st.session_state.telegram_sent = set(list(st.session_state.telegram_sent)[-100:])
+
+# Check for signal changes and create on-screen notifications
 new_notifications = []
 
 for r in results:
@@ -317,7 +452,7 @@ for r in results:
                     'take_profit': r['take_profit']
                 }
                 new_notifications.append(notification)
-            elif notify_neutral:
+            elif notify_signal_change:
                 notification = {
                     'type': 'neutral',
                     'message': f"⚖️ Signal changed to NEUTRAL for {r['name']}",
@@ -625,6 +760,15 @@ if st.session_state.notifications:
         for notif in st.session_state.notifications[:10]:
             st.write(f"• {notif['message']}")
 
+# Telegram status
+with st.expander("📱 Telegram Status"):
+    st.write(f"**Bot Token:** {TELEGRAM_TOKEN[:20]}...")
+    st.write(f"**Chat ID:** {TELEGRAM_CHAT_ID}")
+    st.write(f"**Signals Sent:** {len(st.session_state.telegram_sent)}")
+    st.write("**Last 5 Signals Sent:**")
+    for sig in list(st.session_state.telegram_sent)[-5:]:
+        st.write(f"• {sig}")
+
 # ============================================
 # AUTO-REFRESH LOGIC
 # ============================================
@@ -642,7 +786,7 @@ st.markdown("""
 <div style='text-align: center; color: gray;'>
     <p>⚠️ <b>Educational purposes only</b> - Not financial advice</p>
     <p>📊 Signals based on: RSI, MACD, Moving Averages, and Volatility (ATR)</p>
-    <p>🔔 Notifications appear when signals change or confidence increases</p>
+    <p>📱 Telegram notifications sent to your phone when signals appear</p>
     <p>🔄 Enable auto-refresh in sidebar for live updates</p>
 </div>
 """, unsafe_allow_html=True)
